@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 import { OneCLI } from '@onecli-sh/sdk';
 
@@ -706,10 +707,13 @@ async function main(): Promise<void> {
 }
 
 // Guard: only run when executed directly, not when imported by tests
+// Use fs.realpathSync to resolve symlinks so the check works when
+// the working directory is behind a symlink (e.g. ~/nanoclaw -> Dropbox path).
+// fileURLToPath handles URL-encoded characters (spaces → %20) in import.meta.url.
 const isDirectRun =
   process.argv[1] &&
-  new URL(import.meta.url).pathname ===
-    new URL(`file://${process.argv[1]}`).pathname;
+  fs.realpathSync(fileURLToPath(import.meta.url)) ===
+    fs.realpathSync(process.argv[1]);
 
 if (isDirectRun) {
   main().catch((err) => {

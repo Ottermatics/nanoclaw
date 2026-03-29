@@ -542,6 +542,19 @@ async function main(): Promise<void> {
   let sessionId = containerInput.sessionId;
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
 
+  // Symlink Obsidian config mount → ~/.config/obsidian so notesmd-cli finds it
+  const obsidianConfigSrc = '/workspace/extra/obsidian-config';
+  const obsidianConfigDst = '/home/node/.config/obsidian';
+  if (fs.existsSync(obsidianConfigSrc) && !fs.existsSync(obsidianConfigDst)) {
+    try {
+      fs.mkdirSync(path.dirname(obsidianConfigDst), { recursive: true });
+      fs.symlinkSync(obsidianConfigSrc, obsidianConfigDst);
+      log('Symlinked Obsidian config: /workspace/extra/obsidian-config -> ~/.config/obsidian');
+    } catch (err) {
+      log(`Warning: could not symlink Obsidian config: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Clean up stale _close sentinel from previous container runs
   try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
 
