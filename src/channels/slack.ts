@@ -1,5 +1,7 @@
 import { App, LogLevel } from '@slack/bolt';
 import type { GenericMessageEvent, BotMessageEvent } from '@slack/types';
+import { readFileSync } from 'fs';
+import { basename } from 'path';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { updateChatName } from '../db.js';
@@ -16,6 +18,28 @@ import {
 // Slack's chat.postMessage API limits text to ~4000 characters per call.
 // Messages exceeding this are split into sequential chunks.
 const MAX_MESSAGE_LENGTH = 4000;
+
+// --- File extraction helpers ---
+
+// Matches [[send-file:/path/to/file]] markers placed by agents
+const FILE_MARKER_RE = /\[\[send-file:([^\]]+?)\]\]/g;
+
+/**
+ * Extracts `[[send-file:/path/to/file]]` markers placed by agents. Returns the
+ * cleaned text (markers removed) and an array of absolute file paths to upload.
+ */
+function extractFileMarkers(
+  text: string,
+): { cleanText: string; filePaths: string[] } {
+  const filePaths: string[] = [];
+  const cleanText = text
+    .replace(FILE_MARKER_RE, (_, p: string) => {
+      filePaths.push(p.trim());
+      return '';
+    })
+    .trim();
+  return { cleanText, filePaths };
+}
 
 // The message subtypes we process. Bolt delivers all subtypes via app.event('message');
 // we filter to regular messages (GenericMessageEvent, subtype undefined) and bot messages
@@ -169,18 +193,42 @@ export class SlackChannel implements Channel {
     }
 
     try {
-      // Slack limits messages to ~4000 characters; split if needed
-      if (text.length <= MAX_MESSAGE_LENGTH) {
-        await this.app.client.chat.postMessage({ channel: channelId, text });
-      } else {
-        for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
+      // Extract [[send-file:/path]] markers before chunking.
+      const { cleanText, filePaths } = extractFileMarkers(text);
+
+      // Slack limits messages to ~4000 characters; split if needed.
+      // Use markdown blocks for rich rendering (standard Markdown: **bold**, ## headers, pipe tables).
+      // Falls back to plain text on unsupported plans.
+      const sendChunk = async (chunk: string) => {
+        try {
           await this.app.client.chat.postMessage({
             channel: channelId,
-            text: text.slice(i, i + MAX_MESSAGE_LENGTH),
+            text: chunk,
+            blocks: [{ type: 'markdown', text: chunk }],
           });
+        } catch {
+          // Markdown block unsupported — fall back to plain text
+          await this.app.client.chat.postMessage({ channel: channelId, text: chunk });
+        }
+      };
+
+      if (cleanText.length <= MAX_MESSAGE_LENGTH) {
+        await sendChunk(cleanText);
+      } else {
+        for (let i = 0; i < cleanText.length; i += MAX_MESSAGE_LENGTH) {
+          await sendChunk(cleanText.slice(i, i + MAX_MESSAGE_LENGTH));
         }
       }
-      logger.info({ jid, length: text.length }, 'Slack message sent');
+
+      // Upload any files requested via [[send-file:/path]] markers
+      for (const filePath of filePaths) {
+        await this.uploadFile(jid, filePath);
+      }
+
+      logger.info(
+        { jid, length: text.length, files: filePaths.length },
+        'Slack message sent',
+      );
     } catch (err) {
       this.outgoingQueue.push({ jid, text });
       logger.warn(
@@ -188,6 +236,46 @@ export class SlackChannel implements Channel {
         'Failed to send Slack message, queued',
       );
     }
+  }
+
+  /**
+   * Upload a local file to Slack and share it in the given channel.
+   * Uses the v2 upload API: getUploadURLExternal → POST → completeUploadExternal.
+   *
+   * Agents trigger this by including `[[send-file:/absolute/path/to/file]]` in their output.
+   */
+  async uploadFile(
+    jid: string,
+    filePath: string,
+    filename?: string,
+    title?: string,
+  ): Promise<void> {
+    const channelId = jid.replace(/^slack:/, '');
+    const resolvedName = filename || basename(filePath);
+    const content = readFileSync(filePath);
+
+    // Step 1: Request an upload URL from Slack
+    const urlResponse = await this.app.client.files.getUploadURLExternal({
+      filename: resolvedName,
+      length: content.length,
+    });
+
+    const uploadUrl = urlResponse.upload_url as string;
+    const fileId = urlResponse.file_id as string;
+
+    // Step 2: PUT the file bytes to the pre-signed URL
+    await fetch(uploadUrl, {
+      method: 'POST',
+      body: content,
+    });
+
+    // Step 3: Complete the upload and share it in the channel
+    await this.app.client.files.completeUploadExternal({
+      files: [{ id: fileId, title: title || resolvedName }],
+      channel_id: channelId,
+    });
+
+    logger.info({ jid, filePath, fileId, filename: resolvedName }, 'File uploaded to Slack');
   }
 
   isConnected(): boolean {
