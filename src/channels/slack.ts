@@ -28,9 +28,10 @@ const FILE_MARKER_RE = /\[\[send-file:([^\]]+?)\]\]/g;
  * Extracts `[[send-file:/path/to/file]]` markers placed by agents. Returns the
  * cleaned text (markers removed) and an array of absolute file paths to upload.
  */
-function extractFileMarkers(
-  text: string,
-): { cleanText: string; filePaths: string[] } {
+function extractFileMarkers(text: string): {
+  cleanText: string;
+  filePaths: string[];
+} {
   const filePaths: string[] = [];
   const cleanText = text
     .replace(FILE_MARKER_RE, (_, p: string) => {
@@ -208,7 +209,10 @@ export class SlackChannel implements Channel {
           });
         } catch {
           // Markdown block unsupported — fall back to plain text
-          await this.app.client.chat.postMessage({ channel: channelId, text: chunk });
+          await this.app.client.chat.postMessage({
+            channel: channelId,
+            text: chunk,
+          });
         }
       };
 
@@ -275,7 +279,10 @@ export class SlackChannel implements Channel {
       channel_id: channelId,
     });
 
-    logger.info({ jid, filePath, fileId, filename: resolvedName }, 'File uploaded to Slack');
+    logger.info(
+      { jid, filePath, fileId, filename: resolvedName },
+      'File uploaded to Slack',
+    );
   }
 
   isConnected(): boolean {

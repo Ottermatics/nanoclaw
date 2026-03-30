@@ -42,13 +42,30 @@ arduino-cli upload -p COM3 --fqbn arduino:avr:uno .   # upload
 
 Running flash tools from inside a container or WSL adds several friction points:
 
+### Bridge Config Mount
+
+The detoxbox bridge config is mounted into the container at `/workspace/extra/detoxbox-bridge/`. Always read credentials from there — never hardcode port or token:
+
+```bash
+# Load auth token and port — always read from the secure mount
+BRIDGE_TOKEN=$(cat /workspace/extra/detoxbox-bridge/token)
+BRIDGE_PORT=$(python3 -c "import json; c=json.load(open('/workspace/extra/detoxbox-bridge/config.json')); print(c.get('port', 8765))" 2>/dev/null || echo 8765)
+BRIDGE_URL="http://host.docker.internal:${BRIDGE_PORT}"
+```
+
+**Auth required:** All requests (except `GET /health`) must include `Authorization: Bearer <token>`. The token lives in `/workspace/extra/detoxbox-bridge/token` — only the detoxbox container has this mount, so the token stays isolated.
+
 ### 1 — COM ports are Windows-only
 
 USB serial ports (`COM13`, etc.) exist only in the Windows host. From WSL or a Linux container they are invisible. You **must** proxy all serial commands through the Windows bridge:
 
 ```bash
-curl -s -X POST http://host.docker.internal:8765/exec \
+BRIDGE_TOKEN=$(cat /workspace/extra/detoxbox-bridge/token)
+BRIDGE_PORT=$(python3 -c "import json; c=json.load(open('/workspace/extra/detoxbox-bridge/config.json')); print(c.get('port', 8765))" 2>/dev/null || echo 8765)
+
+curl -s -X POST "http://host.docker.internal:${BRIDGE_PORT}/exec" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $BRIDGE_TOKEN" \
   -d '{"cmd":"mpremote connect COM13 ls :/"}'
 ```
 
@@ -73,8 +90,11 @@ subprocess.run([mpremote, "connect", "COM13", "cp",
 CMD splits the `-c` argument on every space, so inline Python with spaces fails. Always use the base64 wrapper:
 
 ```bash
+BRIDGE_TOKEN=$(cat /workspace/extra/detoxbox-bridge/token)
+BRIDGE_PORT=$(python3 -c "import json; c=json.load(open('/workspace/extra/detoxbox-bridge/config.json')); print(c.get('port', 8765))" 2>/dev/null || echo 8765)
 B64=$(base64 -w 0 /tmp/helper.py)
-curl -X POST http://host.docker.internal:8765/exec \
+curl -X POST "http://host.docker.internal:${BRIDGE_PORT}/exec" \
+  -H "Authorization: Bearer $BRIDGE_TOKEN" \
   -d "{\"cmd\":\"C:\\\\Users\\\\Sup\\\\Anaconda3\\\\envs\\\\fw\\\\python.exe -c exec(__import__('base64').b64decode(b'${B64}'))\"}"
 ```
 
