@@ -13,3 +13,14 @@ else
         echo "⚠  Could not mount G: — make sure Cryptomator is unlocked first"
     fi
 fi
+
+# ── Ottermatics Secrets (Cryptomator T:\) ────────────────────────
+if mountpoint -q /mnt/t 2>/dev/null; then
+    : # already mounted, nothing to do
+else
+    if sudo mount -t drvfs T: /mnt/t 2>/dev/null; then
+        echo "✓ Mounted Cryptomator secrets at /mnt/t"
+    else
+        echo "⚠  Could not mount T: — make sure Cryptomator is unlocked first"
+    fi
+fi
