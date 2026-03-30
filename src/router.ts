@@ -28,8 +28,12 @@ export function stripInternalTags(text: string): string {
   return text.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
 }
 
+export function stripAngledLinks(text: string): string {
+  return text.replace(/\[([^\]]+)\]\(<([^>]+)>\)/g, '[$1]($2)');
+}
+
 export function formatOutbound(rawText: string): string {
-  const text = stripInternalTags(rawText);
+  const text = stripAngledLinks(stripInternalTags(rawText));
   if (!text) return '';
   return text;
 }
