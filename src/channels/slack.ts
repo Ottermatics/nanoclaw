@@ -62,6 +62,7 @@ export class SlackChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private userNameCache = new Map<string, string>();
+  private personas = new Map<string, { username: string; iconEmoji?: string }>();
 
   private opts: SlackChannelOpts;
 
@@ -200,18 +201,23 @@ export class SlackChannel implements Channel {
       // Slack limits messages to ~4000 characters; split if needed.
       // Use markdown blocks for rich rendering (standard Markdown: **bold**, ## headers, pipe tables).
       // Falls back to plain text on unsupported plans.
+      const persona = this.personas.get(jid);
       const sendChunk = async (chunk: string) => {
         try {
           await this.app.client.chat.postMessage({
             channel: channelId,
             text: chunk,
             blocks: [{ type: 'markdown', text: chunk }],
+            ...(persona?.username && { username: persona.username }),
+            ...(persona?.iconEmoji && { icon_emoji: persona.iconEmoji }),
           });
         } catch {
           // Markdown block unsupported — fall back to plain text
           await this.app.client.chat.postMessage({
             channel: channelId,
             text: chunk,
+            ...(persona?.username && { username: persona.username }),
+            ...(persona?.iconEmoji && { icon_emoji: persona.iconEmoji }),
           });
         }
       };
@@ -291,6 +297,14 @@ export class SlackChannel implements Channel {
 
   ownsJid(jid: string): boolean {
     return jid.startsWith('slack:');
+  }
+
+  /**
+   * Register a per-workspace display name and icon for outbound messages.
+   * Requires the `chat:write.customize` OAuth scope on the Slack app.
+   */
+  registerPersona(jid: string, username: string, iconEmoji?: string): void {
+    this.personas.set(jid, { username, iconEmoji });
   }
 
   async disconnect(): Promise<void> {

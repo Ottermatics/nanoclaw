@@ -398,7 +398,7 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
-        assistantName: ASSISTANT_NAME,
+        assistantName: group.agentName || ASSISTANT_NAME,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -675,6 +675,14 @@ async function main(): Promise<void> {
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
+  }
+
+  // Register per-workspace Slack personas (requires chat:write.customize scope)
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    if (group.agentName) {
+      const ch = findChannel(channels, jid);
+      ch?.registerPersona?.(jid, group.agentName, group.slackIcon);
+    }
   }
 
   // Start subsystems (independently of connection handler)

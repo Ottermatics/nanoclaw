@@ -33,27 +33,44 @@ echo ""
 # Use node + better-sqlite3 for all DB queries (cd so require() finds node_modules)
 SESSIONS_DIR="$SCRIPT_DIR/data/sessions"
 cd "$SCRIPT_DIR"
-node -e "
+NANOCLAW_DB="$DB" NANOCLAW_SESSIONS="$SESSIONS_DIR" NANOCLAW_DIR="$SCRIPT_DIR" node << 'NODEJS'
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
-const db = new Database('$DB', { readonly: true });
+
+const DB = process.env.NANOCLAW_DB;
+const SESSIONS_DIR = process.env.NANOCLAW_SESSIONS;
+const SCRIPT_DIR = process.env.NANOCLAW_DIR;
+
+const db = new Database(DB, { readonly: true });
+
+// Read ASSISTANT_NAME from .env
+let globalAgentName = 'Andy';
+try {
+  const envLines = fs.readFileSync(path.join(SCRIPT_DIR, '.env'), 'utf8').split('\n');
+  for (const line of envLines) {
+    if (line.startsWith('ASSISTANT_NAME=')) {
+      globalAgentName = line.slice('ASSISTANT_NAME='.length).replace(/^["']|["']$/g, '').trim();
+      break;
+    }
+  }
+} catch {}
 
 // Workspaces
 const groups = db.prepare(
-  'SELECT folder, name, jid, is_main, requires_trigger, trigger_pattern, container_config FROM registered_groups ORDER BY added_at'
+  'SELECT folder, name, jid, is_main, requires_trigger, trigger_pattern, container_config, agent_name, slack_icon FROM registered_groups ORDER BY added_at'
 ).all();
 
 console.log('=== WORKSPACES ===');
 console.log('');
 const hdr = (s, w) => s.padEnd(w);
 console.log(
-  hdr('WORKSPACE', 20) + hdr('CHANNEL', 24) + hdr('MAIN', 6) +
+  hdr('WORKSPACE', 20) + hdr('AGENT', 12) + hdr('CHANNEL', 24) + hdr('MAIN', 6) +
   hdr('MODEL', 24) + hdr('TRIGGER', 16) + 'MOUNTS'
 );
 
 for (const g of groups) {
-  const settingsFile = path.join('$SESSIONS_DIR', g.folder, '.claude', 'settings.json');
+  const settingsFile = path.join(SESSIONS_DIR, g.folder, '.claude', 'settings.json');
   let model = 'default';
   try {
     const cfg = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
@@ -61,7 +78,8 @@ for (const g of groups) {
   } catch {}
 
   const role = g.is_main ? 'main' : '';
-  const trig = g.requires_trigger === 0 ? 'all messages' : (g.trigger_pattern || '@Olly');
+  const trig = g.requires_trigger === 0 ? 'all messages' : (g.trigger_pattern || globalAgentName);
+  const agent = g.agent_name || globalAgentName;
 
   let mounts = 'none';
   try {
@@ -71,22 +89,21 @@ for (const g of groups) {
     }
   } catch {}
 
-  // Truncate channel JID for display
   const chan = g.jid.length > 22 ? g.jid.slice(0, 20) + '..' : g.jid;
   console.log(
-    hdr(g.name, 20) + hdr(chan, 24) + hdr(role, 6) +
+    hdr(g.name, 20) + hdr(agent, 12) + hdr(chan, 24) + hdr(role, 6) +
     hdr(model, 24) + hdr(trig, 16) + mounts
   );
 }
 console.log('');
 
 // Scheduled tasks
-const taskCount = db.prepare(\"SELECT COUNT(*) as c FROM scheduled_tasks WHERE status = 'active'\").get().c;
+const taskCount = db.prepare("SELECT COUNT(*) as c FROM scheduled_tasks WHERE status = 'active'").get().c;
 if (taskCount > 0) {
   console.log('=== SCHEDULED TASKS (' + taskCount + ' active) ===');
   console.log('');
   const tasks = db.prepare(
-    \"SELECT group_folder, prompt, schedule_type, schedule_value, status, next_run FROM scheduled_tasks WHERE status = 'active' ORDER BY next_run\"
+    "SELECT group_folder, prompt, schedule_type, schedule_value, status, next_run FROM scheduled_tasks WHERE status = 'active' ORDER BY next_run"
   ).all();
   for (const t of tasks) {
     const label = t.prompt.replace(/\n/g, ' | ').replace(/\s+/g, ' ').trim().substring(0, 260);
@@ -102,7 +119,7 @@ if (taskCount > 0) {
 }
 
 db.close();
-"
+NODEJS
 
 # Running containers
 CONTAINERS=$(docker ps --filter "name=nanoclaw-" --format "{{.Names}}\t{{.Status}}" 2>/dev/null)

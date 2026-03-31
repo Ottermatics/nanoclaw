@@ -40,6 +40,8 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  agentName?: string; // Per-workspace display name (e.g. "Guru", "Mage"). Falls back to global ASSISTANT_NAME.
+  slackIcon?: string; // Slack icon_emoji override (e.g. ":crystal_ball:"). Used with chat:write.customize scope.
 }
 
 export interface NewMessage {
@@ -91,6 +93,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: register a per-workspace display name and icon for outbound messages.
+  registerPersona?(jid: string, username: string, iconEmoji?: string): void;
 }
 
 // Callback type that channels use to deliver inbound messages
