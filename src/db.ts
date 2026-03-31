@@ -128,18 +128,14 @@ function createSchema(database: Database.Database): void {
 
   // Add agent_name column if it doesn't exist (migration for existing DBs)
   try {
-    database.exec(
-      `ALTER TABLE registered_groups ADD COLUMN agent_name TEXT`,
-    );
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN agent_name TEXT`);
   } catch {
     /* column already exists */
   }
 
   // Add slack_icon column if it doesn't exist (migration for existing DBs)
   try {
-    database.exec(
-      `ALTER TABLE registered_groups ADD COLUMN slack_icon TEXT`,
-    );
+    database.exec(`ALTER TABLE registered_groups ADD COLUMN slack_icon TEXT`);
   } catch {
     /* column already exists */
   }

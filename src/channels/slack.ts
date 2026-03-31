@@ -62,7 +62,10 @@ export class SlackChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private userNameCache = new Map<string, string>();
-  private personas = new Map<string, { username: string; iconEmoji?: string }>();
+  private personas = new Map<
+    string,
+    { username: string; iconEmoji?: string }
+  >();
 
   private opts: SlackChannelOpts;
 
