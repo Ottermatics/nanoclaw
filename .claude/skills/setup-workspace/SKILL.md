@@ -30,7 +30,7 @@ Show the user their current bindings before proceeding.
 
 ## 1. Collect the Binding
 
-AskUserQuestion — two things are needed:
+AskUserQuestion — three things are needed:
 
 **Question 1 — "Which directory do you want to bind?"**
 Free text. Accept an absolute path (e.g. `/home/olly/projects/webapp`). Verify it exists on disk.
@@ -39,6 +39,9 @@ Free text. Accept an absolute path (e.g. `/home/olly/projects/webapp`). Verify i
 Options:
 - "I have one" — collect the channel ID (`C...` from the channel URL or right-click → Copy link)
 - "I'll create one now" — user creates channel in Slack, adds the bot, then provides the ID
+
+**Question 3 — "What should the agent be called?"**
+This is the agent's identity — used in its `CLAUDE.md`, as the Slack display name, and in `claw-workspace` output. Examples: `Dev`, `Scout`, `Aria`. Must be provided — there is no default for new workspaces.
 
 ## 2. Validate the Directory
 
@@ -105,15 +108,27 @@ npx tsx setup/index.ts --step register -- \
   [--no-trigger-required]
 ```
 
+Then set the agent name and Slack icon in the DB:
+
+```bash
+source setup_env.sh
+node -e "
+const Database = require('better-sqlite3');
+const db = new Database('store/messages.db');
+db.prepare('UPDATE registered_groups SET agent_name = ?, slack_icon = ? WHERE folder = ?')
+  .run('<AgentName>', ':robot_face:', '<folder-name>');
+db.close();
+"
+```
+
 ## 4. Bind the Directory
 
 Set the container config. The mount rules are:
 
 - **Target workspace folder → read-write** (the whole point of a workspace)
+- **Standard mounts → always included** (tmp, storage — see below)
 - **OttermaticsNotes → read-only** (shared knowledge base)
 - **NanoClaw → read-only** (project reference)
-
-These are the defaults. Only the target folder is writable. Everything else is read-only.
 
 ```bash
 source setup_env.sh
@@ -123,7 +138,9 @@ const db = new Database('store/messages.db');
 const config = JSON.stringify({additionalMounts:[
   {hostPath:'<absolute-path>',containerPath:'<basename>',readonly:false},
   {hostPath:'/mnt/c/Users/Sup/Ottermatics Dropbox/Ottermatics/OttermaticsNotes',containerPath:'obsidian',readonly:true},
-  {hostPath:'/mnt/c/Users/Sup/Ottermatics Dropbox/Ottermatics/agents/nanoclaw',containerPath:'nanoclaw',readonly:true}
+  {hostPath:'/mnt/c/Users/Sup/Ottermatics Dropbox/Ottermatics/agents/nanoclaw',containerPath:'nanoclaw',readonly:true},
+  {hostPath:'/tmp/app_storage',containerPath:'tmp',readonly:false},
+  {hostPath:'/mnt/c/Users/Sup/Ottermatics Dropbox/Ottermatics/storage',containerPath:'storage',readonly:false}
 ]});
 db.prepare('UPDATE registered_groups SET container_config = ? WHERE folder = ?').run(config, '<folder-name>');
 db.close();
@@ -132,8 +149,44 @@ db.close();
 
 The agent will see:
 - **`/workspace/extra/<basename>` (read-write)** — the workspace's own project directory
+- **`/workspace/extra/tmp` (read-write)** — ephemeral shared storage (`/tmp/app_storage` on host)
+- **`/workspace/extra/storage` (read-write)** — persistent shared storage (`Ottermatics/storage` on host)
 - `/workspace/extra/obsidian` (read-only) — Obsidian vault
 - `/workspace/extra/nanoclaw` (read-only) — NanoClaw project
+
+### Python / Conda Environments
+
+Each workspace can mount a conda env from the host's miniconda installation at `/home/olly/miniconda3/envs/<env-name>`. This gives the agent access to the full conda Python environment without any container rebuilds.
+
+To add a conda env mount:
+
+```bash
+source setup_env.sh
+node -e "
+const Database = require('better-sqlite3');
+const db = new Database('store/messages.db');
+const row = db.prepare('SELECT container_config FROM registered_groups WHERE folder = ?').get('<folder-name>');
+const config = JSON.parse(row.container_config);
+config.additionalMounts.push({
+  hostPath: '/home/olly/miniconda3/envs/<env-name>',
+  containerPath: 'conda',
+  readonly: true
+});
+db.prepare('UPDATE registered_groups SET container_config = ? WHERE folder = ?').run(JSON.stringify(config), '<folder-name>');
+db.close();
+"
+```
+
+The env appears at `/workspace/extra/conda` inside the container. Run scripts with `/workspace/extra/conda/bin/python3` to use the conda packages.
+
+**Creating a new env on the host (WSL):**
+```bash
+/home/olly/miniconda3/bin/conda create -n <env-name> python=3.11 -y
+/home/olly/miniconda3/bin/conda activate <env-name>
+pip install <packages>
+```
+
+No allowlist changes needed — `/home/olly` is already in the allowlist as read-only, which covers all conda envs.
 
 Verify:
 
@@ -163,6 +216,12 @@ cat > "data/sessions/<folder-name>/.claude/settings.json" << 'EOF'
     "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0",
     "CLAUDE_CODE_USE_MODEL": "<chosen-model-id>"
+  },
+  "permissions": {
+    "deny": [
+      "Bash(git commit*)",
+      "Bash(git push*)"
+    ]
   }
 }
 EOF
@@ -214,9 +273,14 @@ Print:
 
 ```
 Binding: <absolute-path> → #<channel-name>
+Agent:   <AgentName>
 Folder:  groups/<folder-name>/
 Channel: slack:<channel-id>
-Mount:   /workspace/extra/<basename> (<read-write|read-only>)
+Mounts:  /workspace/extra/<basename> (rw)
+         /workspace/extra/tmp (rw)
+         /workspace/extra/storage (rw)
+         /workspace/extra/obsidian (ro)
+         /workspace/extra/nanoclaw (ro)
 Trigger: <every message | @Olly>
 ```
 

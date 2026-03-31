@@ -66,6 +66,8 @@ export class SlackChannel implements Channel {
     string,
     { username: string; iconEmoji?: string }
   >();
+  // thread_ts of the last triggering user message per JID — used to reply in-thread
+  private activeThreads = new Map<string, string>();
 
   private opts: SlackChannelOpts;
 
@@ -108,9 +110,8 @@ export class SlackChannel implements Channel {
 
       if (!msg.text) return;
 
-      // Threaded replies are flattened into the channel conversation.
-      // The agent sees them alongside channel-level messages; responses
-      // always go to the channel, not back into the thread.
+      // Track the thread_ts of each triggering user message so replies go back into the same thread.
+      // Use thread_ts if the message is already in a thread, otherwise use ts (starts a new thread).
 
       const jid = `slack:${msg.channel}`;
       const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
@@ -146,6 +147,17 @@ export class SlackChannel implements Channel {
           !TRIGGER_PATTERN.test(content)
         ) {
           content = `@${ASSISTANT_NAME} ${content}`;
+        }
+      }
+
+      // Only reply in-thread if the message is already in a thread.
+      // Top-level channel messages get a channel-level reply (no thread started).
+      if (!isBotMessage) {
+        const existingThread = (msg as { thread_ts?: string }).thread_ts;
+        if (existingThread) {
+          this.activeThreads.set(jid, existingThread);
+        } else {
+          this.activeThreads.delete(jid);
         }
       }
 
@@ -205,12 +217,14 @@ export class SlackChannel implements Channel {
       // Use markdown blocks for rich rendering (standard Markdown: **bold**, ## headers, pipe tables).
       // Falls back to plain text on unsupported plans.
       const persona = this.personas.get(jid);
+      const threadTs = this.activeThreads.get(jid);
       const sendChunk = async (chunk: string) => {
         try {
           await this.app.client.chat.postMessage({
             channel: channelId,
             text: chunk,
             blocks: [{ type: 'markdown', text: chunk }],
+            ...(threadTs && { thread_ts: threadTs }),
             ...(persona?.username && { username: persona.username }),
             ...(persona?.iconEmoji && { icon_emoji: persona.iconEmoji }),
           });
@@ -219,6 +233,7 @@ export class SlackChannel implements Channel {
           await this.app.client.chat.postMessage({
             channel: channelId,
             text: chunk,
+            ...(threadTs && { thread_ts: threadTs }),
             ...(persona?.username && { username: persona.username }),
             ...(persona?.iconEmoji && { icon_emoji: persona.iconEmoji }),
           });
