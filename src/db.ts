@@ -703,8 +703,14 @@ export function getChannelGuests(channelJid: string): ChannelGuest[] {
     .prepare(
       'SELECT guest_folder, trigger_pattern FROM channel_guests WHERE channel_jid = ?',
     )
-    .all(channelJid) as Array<{ guest_folder: string; trigger_pattern: string }>;
-  return rows.map((r) => ({ guestFolder: r.guest_folder, trigger: r.trigger_pattern }));
+    .all(channelJid) as Array<{
+    guest_folder: string;
+    trigger_pattern: string;
+  }>;
+  return rows.map((r) => ({
+    guestFolder: r.guest_folder,
+    trigger: r.trigger_pattern,
+  }));
 }
 
 export function setChannelGuest(
@@ -718,7 +724,10 @@ export function setChannelGuest(
   ).run(channelJid, guestFolder, trigger, new Date().toISOString());
 }
 
-export function removeChannelGuest(channelJid: string, guestFolder: string): void {
+export function removeChannelGuest(
+  channelJid: string,
+  guestFolder: string,
+): void {
   db.prepare(
     'DELETE FROM channel_guests WHERE channel_jid = ? AND guest_folder = ?',
   ).run(channelJid, guestFolder);

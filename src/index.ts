@@ -279,14 +279,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         const gp = getTriggerPattern(g.trigger);
         return (
           gp.test(lastMsg.content.trim()) &&
-          (lastMsg.is_from_me || isTriggerAllowed(chatJid, lastMsg.sender, silenceAllowlist))
+          (lastMsg.is_from_me ||
+            isTriggerAllowed(chatJid, lastMsg.sender, silenceAllowlist))
         );
       });
       const ownerTriggeredLast =
         ownerTriggerPattern.test(lastMsg.content.trim()) &&
-        (lastMsg.is_from_me || isTriggerAllowed(chatJid, lastMsg.sender, silenceAllowlist));
+        (lastMsg.is_from_me ||
+          isTriggerAllowed(chatJid, lastMsg.sender, silenceAllowlist));
       if (guestTriggeredLast && !ownerTriggeredLast) {
-        logger.info({ chatJid, group: group.name }, 'Owner suppressed — last message is guest-only trigger');
+        logger.info(
+          { chatJid, group: group.name },
+          'Owner suppressed — last message is guest-only trigger',
+        );
         return true;
       }
     }
@@ -490,7 +495,12 @@ async function runAgent(
         assistantName: group.agentName || ASSISTANT_NAME,
       },
       (proc, containerName) =>
-        queue.registerProcess(queueKey ?? chatJid, proc, containerName, group.folder),
+        queue.registerProcess(
+          queueKey ?? chatJid,
+          proc,
+          containerName,
+          group.folder,
+        ),
       wrappedOnOutput,
     );
 
@@ -604,29 +614,43 @@ async function startMessageLoop(): Promise<void> {
                 return groupMessages.some(
                   (m) =>
                     gp.test(m.content.trim()) &&
-                    (m.is_from_me || isTriggerAllowed(chatJid, m.sender, suppressAllowlist)),
+                    (m.is_from_me ||
+                      isTriggerAllowed(chatJid, m.sender, suppressAllowlist)),
                 );
               });
               const ownerTriggeredNow = groupMessages.some(
                 (m) =>
                   ownerTriggerPat.test(m.content.trim()) &&
-                  (m.is_from_me || isTriggerAllowed(chatJid, m.sender, suppressAllowlist)),
+                  (m.is_from_me ||
+                    isTriggerAllowed(chatJid, m.sender, suppressAllowlist)),
               );
               if (guestTriggeredNow && !ownerTriggeredNow) {
                 ownerSuppressedByGuest = true;
-                logger.info({ chatJid, group: group.name }, 'Owner suppressed by guest trigger');
+                logger.info(
+                  { chatJid, group: group.name },
+                  'Owner suppressed by guest trigger',
+                );
               }
             }
           }
 
           if (!ownerSuppressedByGuest) {
             if (queue.sendMessage(chatJid, formatted)) {
-              logger.debug({ chatJid, count: messagesToSend.length }, 'Piped messages to active container');
-              lastAgentTimestamp[chatJid] = messagesToSend[messagesToSend.length - 1].timestamp;
-              saveState();
-              channel.setTyping?.(chatJid, true)?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
+              logger.debug(
+                { chatJid, count: messagesToSend.length },
+                'Piped messages to active container',
               );
+              lastAgentTimestamp[chatJid] =
+                messagesToSend[messagesToSend.length - 1].timestamp;
+              saveState();
+              channel
+                .setTyping?.(chatJid, true)
+                ?.catch((err) =>
+                  logger.warn(
+                    { chatJid, err },
+                    'Failed to set typing indicator',
+                  ),
+                );
             } else {
               queue.enqueueMessageCheck(chatJid);
             }
@@ -648,7 +672,8 @@ async function startMessageLoop(): Promise<void> {
               const guestHasTrigger = groupMessages.some(
                 (m) =>
                   guestTriggerPattern.test(m.content.trim()) &&
-                  (m.is_from_me || isTriggerAllowed(chatJid, m.sender, guestAllowlistCfg)),
+                  (m.is_from_me ||
+                    isTriggerAllowed(chatJid, m.sender, guestAllowlistCfg)),
               );
               if (!guestHasTrigger) continue;
 
@@ -656,7 +681,10 @@ async function startMessageLoop(): Promise<void> {
               const guestQueueKey = `${guest.guestFolder}:${chatJid}`;
               const guestCursorKey = `${guest.guestFolder}:${chatJid}`;
 
-              logger.info({ guest: guestGroup.name, channel: group.name }, 'Guest agent triggered');
+              logger.info(
+                { guest: guestGroup.name, channel: group.name },
+                'Guest agent triggered',
+              );
 
               // Fetch context since this guest's own cursor for this channel
               const guestPending = getMessagesSince(
@@ -664,15 +692,18 @@ async function startMessageLoop(): Promise<void> {
                 lastAgentTimestamp[guestCursorKey] || '',
                 ASSISTANT_NAME,
               );
-              const guestMessages = guestPending.length > 0 ? guestPending : groupMessages;
+              const guestMessages =
+                guestPending.length > 0 ? guestPending : groupMessages;
               const guestFormatted = formatMessages(guestMessages, TIMEZONE);
 
               // Try active guest container first, otherwise spawn fresh
               if (queue.sendMessage(guestQueueKey, guestFormatted)) {
-                lastAgentTimestamp[guestCursorKey] = guestMessages[guestMessages.length - 1].timestamp;
+                lastAgentTimestamp[guestCursorKey] =
+                  guestMessages[guestMessages.length - 1].timestamp;
                 saveState();
               } else {
-                lastAgentTimestamp[guestCursorKey] = guestMessages[guestMessages.length - 1].timestamp;
+                lastAgentTimestamp[guestCursorKey] =
+                  guestMessages[guestMessages.length - 1].timestamp;
                 saveState();
                 const guestJid = jidByFolder[guestGroup.folder];
                 runAgent(
@@ -681,8 +712,13 @@ async function startMessageLoop(): Promise<void> {
                   chatJid,
                   async (result) => {
                     if (result.result) {
-                      const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
-                      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+                      const raw =
+                        typeof result.result === 'string'
+                          ? result.result
+                          : JSON.stringify(result.result);
+                      const text = raw
+                        .replace(/<internal>[\s\S]*?<\/internal>/g, '')
+                        .trim();
                       if (text) {
                         if (channel.sendMessageAs && guestJid) {
                           await channel.sendMessageAs(chatJid, text, guestJid);
@@ -707,7 +743,10 @@ async function startMessageLoop(): Promise<void> {
                   },
                   guestQueueKey,
                 ).catch((err) => {
-                  logger.error({ guest: guestGroup.name, channel: group.name, err }, 'Guest agent error');
+                  logger.error(
+                    { guest: guestGroup.name, channel: group.name, err },
+                    'Guest agent error',
+                  );
                 });
               }
             }

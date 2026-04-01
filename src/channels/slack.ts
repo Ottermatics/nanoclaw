@@ -167,7 +167,11 @@ export class SlackChannel implements Channel {
         const threadTs = (msg as { thread_ts?: string }).thread_ts || msg.ts;
         this.activeThreads.set(jid, threadTs);
         // Persist so restarts don't lose the active thread
-        try { setRouterState(`active_thread:${jid}`, threadTs); } catch { /* non-fatal */ }
+        try {
+          setRouterState(`active_thread:${jid}`, threadTs);
+        } catch {
+          /* non-fatal */
+        }
       }
 
       this.opts.onMessage(jid, {
@@ -206,7 +210,9 @@ export class SlackChannel implements Channel {
         const stored = getRouterState(`active_thread:${jid}`);
         if (stored) this.activeThreads.set(jid, stored);
       }
-    } catch { /* non-fatal — fall back to channel root */ }
+    } catch {
+      /* non-fatal — fall back to channel root */
+    }
 
     // Flush any messages queued before connection
     await this.flushOutgoingQueue();
