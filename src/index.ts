@@ -31,8 +31,10 @@ import {
   ensureContainerRuntimeRunning,
 } from './container-runtime.js';
 import {
+  ChannelGuest,
   deleteSession,
   getAllChats,
+  getAllChannelGuests,
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
@@ -71,6 +73,12 @@ export { escapeXml, formatMessages } from './router.js';
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
+// Map from channelJid -> array of guest assignments for that channel
+let channelGuests: Record<string, ChannelGuest[]> = {};
+// Map from folder -> RegisteredGroup for guest lookup
+let groupsByFolder: Record<string, RegisteredGroup> = {};
+// Map from folder -> JID (reverse of registeredGroups) for persona lookups
+let jidByFolder: Record<string, string> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
@@ -109,8 +117,32 @@ function loadState(): void {
   }
   sessions = getAllSessions();
   registeredGroups = getAllRegisteredGroups();
+
+  // Build folder -> group map and folder -> JID map for guest lookups
+  groupsByFolder = {};
+  jidByFolder = {};
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    groupsByFolder[group.folder] = group;
+    jidByFolder[group.folder] = jid;
+  }
+
+  // Load channel guest assignments: channelJid -> [{guestFolder, trigger}]
+  channelGuests = {};
+  for (const guest of getAllChannelGuests()) {
+    if (!channelGuests[guest.channelJid]) {
+      channelGuests[guest.channelJid] = [];
+    }
+    channelGuests[guest.channelJid].push({
+      guestFolder: guest.guestFolder,
+      trigger: guest.trigger,
+    });
+  }
+
   logger.info(
-    { groupCount: Object.keys(registeredGroups).length },
+    {
+      groupCount: Object.keys(registeredGroups).length,
+      guestChannelCount: Object.keys(channelGuests).length,
+    },
     'State loaded',
   );
 }
@@ -134,6 +166,22 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
 
   registeredGroups[jid] = group;
   setRegisteredGroup(jid, group);
+
+  // Keep folder maps in sync
+  groupsByFolder[group.folder] = group;
+  jidByFolder[group.folder] = jid;
+
+  // Refresh channel guest cache so newly-registered groups are visible as guests
+  channelGuests = {};
+  for (const guest of getAllChannelGuests()) {
+    if (!channelGuests[guest.channelJid]) {
+      channelGuests[guest.channelJid] = [];
+    }
+    channelGuests[guest.channelJid].push({
+      guestFolder: guest.guestFolder,
+      trigger: guest.trigger,
+    });
+  }
 
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
@@ -217,6 +265,33 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // Guest-silence check: only look at the LAST message in the batch.
+  // This prevents a stale @Cody from earlier in the queue from permanently
+  // deadlocking the owner. If Kevin's most recent message is @Cody, suppress;
+  // if it's anything else, let the owner respond even if @Cody was in backlog.
+  if (!isMainGroup && group.requiresTrigger === false) {
+    const guestsForSilence = channelGuests[chatJid];
+    if (guestsForSilence && guestsForSilence.length > 0) {
+      const silenceAllowlist = loadSenderAllowlist();
+      const ownerTriggerPattern = getTriggerPattern(group.trigger);
+      const lastMsg = missedMessages[missedMessages.length - 1];
+      const guestTriggeredLast = guestsForSilence.some((g) => {
+        const gp = getTriggerPattern(g.trigger);
+        return (
+          gp.test(lastMsg.content.trim()) &&
+          (lastMsg.is_from_me || isTriggerAllowed(chatJid, lastMsg.sender, silenceAllowlist))
+        );
+      });
+      const ownerTriggeredLast =
+        ownerTriggerPattern.test(lastMsg.content.trim()) &&
+        (lastMsg.is_from_me || isTriggerAllowed(chatJid, lastMsg.sender, silenceAllowlist));
+      if (guestTriggeredLast && !ownerTriggeredLast) {
+        logger.info({ chatJid, group: group.name }, 'Owner suppressed — last message is guest-only trigger');
+        return true;
+      }
+    }
+  }
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const triggerPattern = getTriggerPattern(group.trigger);
@@ -274,6 +349,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
+        // Explicitly store the agent's own response so other agents in the same
+        // channel can see it via getMessagesSince on their next trigger.
+        // is_bot_message=false marks it as a visible channel participant, not noise.
+        storeMessage({
+          id: `agent-${group.folder}-${Date.now()}`,
+          chat_jid: chatJid,
+          sender: group.folder,
+          sender_name: group.agentName || ASSISTANT_NAME,
+          content: text,
+          timestamp: new Date().toISOString(),
+          is_from_me: true,
+          is_bot_message: false,
+        });
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -319,6 +407,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  queueKey?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   let sessionId: string | undefined = sessions[group.folder];
@@ -401,7 +490,7 @@ async function runAgent(
         assistantName: group.agentName || ASSISTANT_NAME,
       },
       (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder),
+        queue.registerProcess(queueKey ?? chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
     );
 
@@ -500,23 +589,128 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
-            logger.debug(
-              { chatJid, count: messagesToSend.length },
-              'Piped messages to active container',
-            );
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
-            saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
+          // --- Owner dispatch ---
+          // Owner suppression: only suppress if the CURRENT incoming batch
+          // (groupMessages) contains an exclusive guest trigger. We never look
+          // at accumulated history — that caused permanent deadlocks.
+          let ownerSuppressedByGuest = false;
+          if (!isMainGroup && group.requiresTrigger === false) {
+            const guestsForChannel = channelGuests[chatJid];
+            if (guestsForChannel && guestsForChannel.length > 0) {
+              const suppressAllowlist = loadSenderAllowlist();
+              const ownerTriggerPat = getTriggerPattern(group.trigger);
+              const guestTriggeredNow = guestsForChannel.some((g) => {
+                const gp = getTriggerPattern(g.trigger);
+                return groupMessages.some(
+                  (m) =>
+                    gp.test(m.content.trim()) &&
+                    (m.is_from_me || isTriggerAllowed(chatJid, m.sender, suppressAllowlist)),
+                );
+              });
+              const ownerTriggeredNow = groupMessages.some(
+                (m) =>
+                  ownerTriggerPat.test(m.content.trim()) &&
+                  (m.is_from_me || isTriggerAllowed(chatJid, m.sender, suppressAllowlist)),
+              );
+              if (guestTriggeredNow && !ownerTriggeredNow) {
+                ownerSuppressedByGuest = true;
+                logger.info({ chatJid, group: group.name }, 'Owner suppressed by guest trigger');
+              }
+            }
+          }
+
+          if (!ownerSuppressedByGuest) {
+            if (queue.sendMessage(chatJid, formatted)) {
+              logger.debug({ chatJid, count: messagesToSend.length }, 'Piped messages to active container');
+              lastAgentTimestamp[chatJid] = messagesToSend[messagesToSend.length - 1].timestamp;
+              saveState();
+              channel.setTyping?.(chatJid, true)?.catch((err) =>
                 logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
               );
-          } else {
-            // No active container — enqueue for a new one
-            queue.enqueueMessageCheck(chatJid);
+            } else {
+              queue.enqueueMessageCheck(chatJid);
+            }
+          }
+
+          // --- Guest dispatch ---
+          // Guests are dispatched independently of the owner, always from this
+          // path only (processGroupMessages has no guest logic). Each guest uses
+          // a composite queue key (guestFolder:chatJid) and composite cursor key
+          // to avoid colliding with the owner or other guests.
+          const guestsNow = channelGuests[chatJid];
+          if (guestsNow && guestsNow.length > 0) {
+            const guestAllowlistCfg = loadSenderAllowlist();
+            for (const guest of guestsNow) {
+              const guestGroup = groupsByFolder[guest.guestFolder];
+              if (!guestGroup) continue;
+
+              const guestTriggerPattern = getTriggerPattern(guest.trigger);
+              const guestHasTrigger = groupMessages.some(
+                (m) =>
+                  guestTriggerPattern.test(m.content.trim()) &&
+                  (m.is_from_me || isTriggerAllowed(chatJid, m.sender, guestAllowlistCfg)),
+              );
+              if (!guestHasTrigger) continue;
+
+              // Composite keys: isolate each guest-in-channel pair
+              const guestQueueKey = `${guest.guestFolder}:${chatJid}`;
+              const guestCursorKey = `${guest.guestFolder}:${chatJid}`;
+
+              logger.info({ guest: guestGroup.name, channel: group.name }, 'Guest agent triggered');
+
+              // Fetch context since this guest's own cursor for this channel
+              const guestPending = getMessagesSince(
+                chatJid,
+                lastAgentTimestamp[guestCursorKey] || '',
+                ASSISTANT_NAME,
+              );
+              const guestMessages = guestPending.length > 0 ? guestPending : groupMessages;
+              const guestFormatted = formatMessages(guestMessages, TIMEZONE);
+
+              // Try active guest container first, otherwise spawn fresh
+              if (queue.sendMessage(guestQueueKey, guestFormatted)) {
+                lastAgentTimestamp[guestCursorKey] = guestMessages[guestMessages.length - 1].timestamp;
+                saveState();
+              } else {
+                lastAgentTimestamp[guestCursorKey] = guestMessages[guestMessages.length - 1].timestamp;
+                saveState();
+                const guestJid = jidByFolder[guestGroup.folder];
+                runAgent(
+                  guestGroup,
+                  guestFormatted,
+                  chatJid,
+                  async (result) => {
+                    if (result.result) {
+                      const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+                      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+                      if (text) {
+                        if (channel.sendMessageAs && guestJid) {
+                          await channel.sendMessageAs(chatJid, text, guestJid);
+                        } else {
+                          await channel.sendMessage(chatJid, text);
+                        }
+                        // Explicitly store guest response so the channel owner and
+                        // other guests see it via getMessagesSince on their next trigger.
+                        // is_bot_message=false marks it as a visible participant.
+                        storeMessage({
+                          id: `agent-${guestGroup.folder}-${Date.now()}`,
+                          chat_jid: chatJid,
+                          sender: guestGroup.folder,
+                          sender_name: guestGroup.agentName || guestGroup.name,
+                          content: text,
+                          timestamp: new Date().toISOString(),
+                          is_from_me: false,
+                          is_bot_message: false,
+                        });
+                      }
+                    }
+                  },
+                  guestQueueKey,
+                ).catch((err) => {
+                  logger.error({ guest: guestGroup.name, channel: group.name, err }, 'Guest agent error');
+                });
+              }
+            }
           }
         }
       }

@@ -9,6 +9,58 @@ Bind a host directory to a Slack channel. Messages in that channel go to an agen
 
 **Principle:** Do the work. Only pause when the user needs to act in Slack or provide information.
 
+---
+
+## Universal Workspace Behaviors
+
+**This is the master reference for workspace behavior.** Every workspace — regardless of its purpose, agent name, or access level — follows the same behavioral contract. Channel owners and channel guests have equivalent obligations; they differ only in what they have access to, not in how they communicate.
+
+When these standards change, update:
+1. This section (the source of truth)
+2. `groups/global/CLAUDE.md` (inherited base for all agents)
+3. Each existing `groups/<workspace>/CLAUDE.md` (workspace-specific examples)
+4. The CLAUDE.md template in **Step 6** of this skill (applied to all new workspaces)
+
+### Traceability (Required in all Slack responses)
+
+Every agent must explain itself before giving an answer. This applies symmetrically to every agent in every channel — there is no exception for owners vs. guests.
+
+**Four rules:**
+- **Name your source** — file path, command output, DB query, log line, or prior session
+- **Connect the dots** — one sentence: what you checked and why your conclusion follows
+- **Log changes** — when you write a file, run a command, or modify state, say what you did and why
+- **Identify as guest** — if responding in another agent's channel, open with your agent name ("**[your name] here** — [what you're doing]:")
+
+**Examples:**
+> ❌ "The config looks correct."
+> ✅ "Checked `container_config` in the DB — bridge mount is present and read-only."
+
+> ❌ "You have overdue tasks."
+> ✅ "From `vault-query tasks` — 3 items overdue: DetoxBox infra, micropython wifi setup, resin molds."
+
+Keep it brief — one sentence of context is enough. But never skip it.
+
+### Guest / Owner Protocol
+
+A **channel owner** is the primary agent for a workspace. A **channel guest** is any other agent responding in that channel (e.g. Mage invited into the detoxbox channel).
+
+Both follow identical traceability rules. The only difference is that guests must open with their name so the channel owner's user knows who is speaking. Guests do not have reduced obligations — and owners do not have elevated ones.
+
+### Message Queuing
+
+Messages to a workspace are serialized through a per-group queue (`GroupQueue`). New messages are piped into the idle container for that group — they do not spawn a second container. Responses are sequential and deterministic.
+
+### Session History
+
+Nightly cleanup (run by main at 1am) processes all workspaces:
+- Session `.jsonl` files over threshold are compacted into `sessions/latest.md`
+- Old `latest.md` is archived to `sessions/archive/YYYY-MM-DD.md`
+- Session ID is cleared so the next container starts fresh
+
+Every workspace CLAUDE.md should instruct the agent to read `sessions/latest.md` at session start.
+
+---
+
 ## 0. Pre-flight
 
 ```bash
@@ -238,6 +290,24 @@ Options:
 - "Skip" — just add a note to CLAUDE.md that the agent's project directory is at `/workspace/extra/<basename>`.
 
 Either way, ensure the CLAUDE.md tells the agent where to find the bound directory.
+
+**Always include a Traceability section** in every generated CLAUDE.md, immediately before the Message Formatting section:
+
+```markdown
+## Traceability
+
+**Always explain yourself.** State what you looked at before giving an answer.
+
+- **Name your source** — file path, command output, log line, or prior session (e.g. "From `<project-dir>/…`", "Checked the task in `sessions/latest.md`…")
+- **Connect the dots** — one sentence: what you checked and why your conclusion follows
+- **Log changes** — when you write a file, run a command, or modify state, say what you did and why
+- **Identify as guest** — if responding in another channel, open with your name ("**<AgentName> here** — reviewing:")
+
+> ❌ "The config looks correct."
+> ✅ "Checked `<project-dir>/config.json` — all required keys present, no parse errors."
+
+Keep it brief — one sentence of context is enough. But always include it.
+```
 
 ## 6. Restart and Test
 

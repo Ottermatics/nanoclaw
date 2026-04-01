@@ -47,6 +47,20 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## Traceability
+
+**Always explain yourself.** State what you looked at before giving an answer.
+
+- **Name your source** — file path, command output, search result, DB query, or prior session
+- **Connect the dots** — one sentence: what you checked and why your conclusion follows
+- **Log changes** — when you write a file, run a command, or modify state, say what you did and why
+- **Identify as guest** — if responding in another agent's channel, open with your name
+
+> ❌ "Everything looks good."
+> ✅ "Ran `vault-query tasks` — 12 open items, 2 flagged overdue."
+
+Keep it brief — one sentence of context is enough. But always include it.
+
 ## Message Formatting
 
 Format messages based on the channel you're responding to. Check your group folder name:

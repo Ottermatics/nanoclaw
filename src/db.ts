@@ -82,6 +82,13 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS channel_guests (
+      channel_jid TEXT NOT NULL,
+      guest_folder TEXT NOT NULL,
+      trigger_pattern TEXT NOT NULL,
+      added_at TEXT NOT NULL,
+      PRIMARY KEY (channel_jid, guest_folder)
+    );
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -682,6 +689,56 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     };
   }
   return result;
+}
+
+// --- Channel guest accessors ---
+
+export interface ChannelGuest {
+  guestFolder: string;
+  trigger: string;
+}
+
+export function getChannelGuests(channelJid: string): ChannelGuest[] {
+  const rows = db
+    .prepare(
+      'SELECT guest_folder, trigger_pattern FROM channel_guests WHERE channel_jid = ?',
+    )
+    .all(channelJid) as Array<{ guest_folder: string; trigger_pattern: string }>;
+  return rows.map((r) => ({ guestFolder: r.guest_folder, trigger: r.trigger_pattern }));
+}
+
+export function setChannelGuest(
+  channelJid: string,
+  guestFolder: string,
+  trigger: string,
+): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO channel_guests (channel_jid, guest_folder, trigger_pattern, added_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(channelJid, guestFolder, trigger, new Date().toISOString());
+}
+
+export function removeChannelGuest(channelJid: string, guestFolder: string): void {
+  db.prepare(
+    'DELETE FROM channel_guests WHERE channel_jid = ? AND guest_folder = ?',
+  ).run(channelJid, guestFolder);
+}
+
+export function getAllChannelGuests(): Array<{
+  channelJid: string;
+  guestFolder: string;
+  trigger: string;
+}> {
+  const rows = db.prepare('SELECT * FROM channel_guests').all() as Array<{
+    channel_jid: string;
+    guest_folder: string;
+    trigger_pattern: string;
+  }>;
+  return rows.map((r) => ({
+    channelJid: r.channel_jid,
+    guestFolder: r.guest_folder,
+    trigger: r.trigger_pattern,
+  }));
 }
 
 // --- JSON migration ---

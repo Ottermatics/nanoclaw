@@ -243,7 +243,9 @@ ExecStart=${nodePath} ${projectRoot}/dist/index.js
 WorkingDirectory=${projectRoot}
 Restart=always
 RestartSec=5
-KillMode=process
+# Kill the entire cgroup on stop — ensures no orphaned node child processes survive restart
+KillMode=control-group
+TimeoutStopSec=30
 Environment=HOME=${homeDir}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin
 StandardOutput=append:${projectRoot}/logs/nanoclaw.log

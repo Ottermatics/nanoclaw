@@ -95,6 +95,9 @@ export interface Channel {
   syncGroups?(force: boolean): Promise<void>;
   // Optional: register a per-workspace display name and icon for outbound messages.
   registerPersona?(jid: string, username: string, iconEmoji?: string): void;
+  // Optional: send a message to `jid` using the persona registered for `asJid`.
+  // Used by guest agents to respond to a host channel using their own identity.
+  sendMessageAs?(jid: string, text: string, asJid: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

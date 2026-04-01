@@ -4,7 +4,7 @@ import { readFileSync } from 'fs';
 import { basename } from 'path';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
-import { updateChatName } from '../db.js';
+import { updateChatName, getRouterState, setRouterState } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -126,8 +126,17 @@ export class SlackChannel implements Channel {
 
       const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
 
+      // A bot_message with a custom username that isn't our own name is a
+      // guest agent response. Treat it as a visible participant so the channel
+      // owner can see it in their message history (is_bot_message stays false).
+      const msgUsername = (msg as { username?: string }).username;
+      const isGuestAgentMessage =
+        isBotMessage && !!msgUsername && msgUsername !== ASSISTANT_NAME;
+
       let senderName: string;
-      if (isBotMessage) {
+      if (isGuestAgentMessage) {
+        senderName = msgUsername!;
+      } else if (isBotMessage) {
         senderName = ASSISTANT_NAME;
       } else {
         senderName =
@@ -150,15 +159,15 @@ export class SlackChannel implements Channel {
         }
       }
 
-      // Only reply in-thread if the message is already in a thread.
-      // Top-level channel messages get a channel-level reply (no thread started).
+      // Always reply in a thread when responding to a user request.
+      // Use existing thread_ts if already in a thread, otherwise start one from msg.ts.
+      // Scheduled tasks / proactive reports call sendMessage directly and won't have
+      // an activeThread entry, so they post to the channel root.
       if (!isBotMessage) {
-        const existingThread = (msg as { thread_ts?: string }).thread_ts;
-        if (existingThread) {
-          this.activeThreads.set(jid, existingThread);
-        } else {
-          this.activeThreads.delete(jid);
-        }
+        const threadTs = (msg as { thread_ts?: string }).thread_ts || msg.ts;
+        this.activeThreads.set(jid, threadTs);
+        // Persist so restarts don't lose the active thread
+        try { setRouterState(`active_thread:${jid}`, threadTs); } catch { /* non-fatal */ }
       }
 
       this.opts.onMessage(jid, {
@@ -168,8 +177,8 @@ export class SlackChannel implements Channel {
         sender_name: senderName,
         content,
         timestamp,
-        is_from_me: isBotMessage,
-        is_bot_message: isBotMessage,
+        is_from_me: isBotMessage && !isGuestAgentMessage,
+        is_bot_message: isBotMessage && !isGuestAgentMessage,
       });
     });
   }
@@ -189,6 +198,15 @@ export class SlackChannel implements Channel {
     }
 
     this.connected = true;
+
+    // Restore persisted active threads so replies go to the right thread after restart
+    try {
+      const { getAllRegisteredGroups } = await import('../db.js');
+      for (const [jid] of Object.entries(getAllRegisteredGroups())) {
+        const stored = getRouterState(`active_thread:${jid}`);
+        if (stored) this.activeThreads.set(jid, stored);
+      }
+    } catch { /* non-fatal — fall back to channel root */ }
 
     // Flush any messages queued before connection
     await this.flushOutgoingQueue();
@@ -263,6 +281,28 @@ export class SlackChannel implements Channel {
         { jid, err, queueSize: this.outgoingQueue.length },
         'Failed to send Slack message, queued',
       );
+    }
+  }
+
+  /**
+   * Send a message to `jid` using the persona registered for `asJid`.
+   * Used by guest agents to respond in a host channel while keeping their own identity.
+   */
+  async sendMessageAs(jid: string, text: string, asJid: string): Promise<void> {
+    // Temporarily register the guest persona under the host JID, send, then restore.
+    const original = this.personas.get(jid);
+    const guestPersona = this.personas.get(asJid);
+    if (guestPersona) {
+      this.personas.set(jid, guestPersona);
+    }
+    try {
+      await this.sendMessage(jid, text);
+    } finally {
+      if (original) {
+        this.personas.set(jid, original);
+      } else {
+        this.personas.delete(jid);
+      }
     }
   }
 
