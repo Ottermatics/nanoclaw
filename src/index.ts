@@ -452,8 +452,20 @@ async function runAgent(
         deleteSession(group.folder);
         sessionId = undefined;
       }
-    } catch {
-      // File doesn't exist or stat failed — proceed with existing sessionId
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // JSONL was deleted (e.g. nightly cleanup) — proactively clear the
+        // stale session so the container doesn't immediately error out with
+        // "No conversation found with session ID".
+        logger.warn(
+          { group: group.folder, sessionId },
+          'Session JSONL missing — clearing stale session ID proactively',
+        );
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+        sessionId = undefined;
+      }
+      // Other stat errors: proceed; container will fail and auto-clear on error.
     }
   }
 
@@ -483,10 +495,14 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
-  // Wrap onOutput to track session ID from streamed results
+  // Wrap onOutput to track session ID from streamed results.
+  // Only store newSessionId from success outputs — error outputs return the
+  // SAME stale session ID that just failed. Storing it would re-create the
+  // stale entry AFTER runAgent clears it, causing a retry loop that always
+  // hits "No conversation found" until max retries.
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
+        if (output.newSessionId && output.status !== 'error') {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
         }
@@ -521,6 +537,14 @@ async function runAgent(
     }
 
     if (output.status === 'error') {
+      if (output.error && output.error.includes('No conversation found')) {
+        logger.warn(
+          { group: group.name, sessionId: sessions[group.folder] },
+          'Session file missing — clearing stale session ID',
+        );
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+      }
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',
