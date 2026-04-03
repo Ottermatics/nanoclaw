@@ -309,6 +309,16 @@ Either way, ensure the CLAUDE.md tells the agent where to find the bound directo
 Keep it brief — one sentence of context is enough. But always include it.
 ```
 
+**Always include a Communication section** with both outbound tools:
+
+```markdown
+## Communication
+
+Your output is sent to the user or group. You also have two outbound message tools:
+- `mcp__nanoclaw__send_message` — sends a conversational message immediately (stays in the current thread if one is active). Use for progress updates, acknowledgements, and replies within an ongoing conversation.
+- `mcp__nanoclaw__send_report` — posts to channel root, bypassing any active thread. Use for scheduled reports, morning briefs, EOD summaries, and any announcement that should start its own thread when replied to.
+```
+
 ## 6. Restart and Test
 
 ```bash

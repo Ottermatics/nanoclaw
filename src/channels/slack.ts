@@ -4,7 +4,7 @@ import { readFileSync } from 'fs';
 import { basename } from 'path';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
-import { updateChatName, getRouterState, setRouterState } from '../db.js';
+import { updateChatName } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -68,6 +68,9 @@ export class SlackChannel implements Channel {
   >();
   // thread_ts of the last triggering user message per JID — used to reply in-thread
   private activeThreads = new Map<string, string>();
+  // Locked reply thread per JID — snapshotted at agent run start so replies
+  // go to the triggering thread even if new messages arrive during processing.
+  private lockedReplyThreads = new Map<string, string>();
 
   private opts: SlackChannelOpts;
 
@@ -159,19 +162,12 @@ export class SlackChannel implements Channel {
         }
       }
 
-      // Always reply in a thread when responding to a user request.
-      // Use existing thread_ts if already in a thread, otherwise start one from msg.ts.
-      // Scheduled tasks / proactive reports call sendMessage directly and won't have
-      // an activeThread entry, so they post to the channel root.
+      // Track the thread_ts of each triggering user message so replies go back
+      // into the same thread. Not persisted — on restart, the next incoming message
+      // sets the correct thread. Stale persisted threads caused wrong-thread replies.
       if (!isBotMessage) {
         const threadTs = (msg as { thread_ts?: string }).thread_ts || msg.ts;
         this.activeThreads.set(jid, threadTs);
-        // Persist so restarts don't lose the active thread
-        try {
-          setRouterState(`active_thread:${jid}`, threadTs);
-        } catch {
-          /* non-fatal */
-        }
       }
 
       this.opts.onMessage(jid, {
@@ -203,22 +199,22 @@ export class SlackChannel implements Channel {
 
     this.connected = true;
 
-    // Restore persisted active threads so replies go to the right thread after restart
-    try {
-      const { getAllRegisteredGroups } = await import('../db.js');
-      for (const [jid] of Object.entries(getAllRegisteredGroups())) {
-        const stored = getRouterState(`active_thread:${jid}`);
-        if (stored) this.activeThreads.set(jid, stored);
-      }
-    } catch {
-      /* non-fatal — fall back to channel root */
-    }
-
     // Flush any messages queued before connection
     await this.flushOutgoingQueue();
 
     // Sync channel names on startup
     await this.syncChannelMetadata();
+  }
+
+  /** Lock the reply thread for a JID at agent run start. */
+  lockReplyThread(jid: string): void {
+    const ts = this.activeThreads.get(jid);
+    if (ts) this.lockedReplyThreads.set(jid, ts);
+  }
+
+  /** Unlock the reply thread after agent run completes. */
+  unlockReplyThread(jid: string): void {
+    this.lockedReplyThreads.delete(jid);
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
@@ -241,7 +237,9 @@ export class SlackChannel implements Channel {
       // Use markdown blocks for rich rendering (standard Markdown: **bold**, ## headers, pipe tables).
       // Falls back to plain text on unsupported plans.
       const persona = this.personas.get(jid);
-      const threadTs = this.activeThreads.get(jid);
+      // Use locked thread (snapshotted at agent run start) so replies go to the
+      // correct thread even if new messages arrived during processing.
+      const threadTs = this.lockedReplyThreads.get(jid) ?? this.activeThreads.get(jid);
       const sendChunk = async (chunk: string) => {
         try {
           await this.app.client.chat.postMessage({
@@ -287,6 +285,44 @@ export class SlackChannel implements Channel {
         { jid, err, queueSize: this.outgoingQueue.length },
         'Failed to send Slack message, queued',
       );
+    }
+  }
+
+  /**
+   * Post to channel root, bypassing any active reply thread.
+   * Used for scheduled reports, morning briefs, and announcements that should
+   * start their own thread when replied to — not land inside an existing thread.
+   */
+  async sendReport(jid: string, text: string): Promise<void> {
+    const channelId = jid.replace(/^slack:/, '');
+    const persona = this.personas.get(jid);
+    try {
+      await this.app.client.chat.postMessage({
+        channel: channelId,
+        text,
+        blocks: [{ type: 'markdown', text }],
+        // Deliberately no thread_ts — always posts to channel root
+        ...(persona?.username && { username: persona.username }),
+        ...(persona?.iconEmoji && { icon_emoji: persona.iconEmoji }),
+      });
+      logger.info({ jid, length: text.length }, 'Slack report posted to channel root');
+    } catch {
+      // Markdown block unsupported — fall back to plain text (still root)
+      try {
+        await this.app.client.chat.postMessage({
+          channel: channelId,
+          text,
+          ...(persona?.username && { username: persona.username }),
+          ...(persona?.iconEmoji && { icon_emoji: persona.iconEmoji }),
+        });
+      } catch (err) {
+        // Queue for retry like sendMessage does — avoids silently dropping reports
+        this.outgoingQueue.push({ jid, text });
+        logger.warn(
+          { jid, err, queueSize: this.outgoingQueue.length },
+          'Failed to post report to channel root, queued for retry',
+        );
+      }
     }
   }
 

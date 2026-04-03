@@ -98,6 +98,10 @@ export interface Channel {
   // Optional: send a message to `jid` using the persona registered for `asJid`.
   // Used by guest agents to respond to a host channel using their own identity.
   sendMessageAs?(jid: string, text: string, asJid: string): Promise<void>;
+  // Optional: post to channel root, bypassing any active reply thread.
+  // For scheduled reports and announcements that should start their own thread.
+  // Falls back to sendMessage on channels that don't support threading.
+  sendReport?(jid: string, text: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

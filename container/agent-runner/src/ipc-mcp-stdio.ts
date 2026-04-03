@@ -63,6 +63,27 @@ server.tool(
 );
 
 server.tool(
+  'send_report',
+  "Post an announcement, briefing, or report directly to the channel root — never inside a thread. Use this for scheduled reports, morning briefs, EOD summaries, and any proactive announcement that should start its own thread when replied to. For conversational replies within an ongoing thread, use send_message instead.",
+  {
+    text: z.string().describe('The report or announcement text to post'),
+  },
+  async (args) => {
+    const data: Record<string, string | undefined> = {
+      type: 'report',
+      chatJid,
+      text: args.text,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: 'Report posted to channel root.' }] };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 

@@ -337,6 +337,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
+  // Lock the reply thread for this agent run so replies go to the triggering
+  // thread even if new messages arrive during processing (race condition fix).
+  (channel as unknown as { lockReplyThread?: (jid: string) => void }).lockReplyThread?.(chatJid);
+
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
@@ -403,6 +407,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     );
     return false;
   }
+
+  // Unlock reply thread after agent run completes (success or error).
+  (channel as unknown as { unlockReplyThread?: (jid: string) => void }).unlockReplyThread?.(chatJid);
 
   return true;
 }
@@ -740,6 +747,23 @@ async function startMessageLoop(): Promise<void> {
                         });
                       }
                     }
+                    // Mark the guest container idle so the queue releases it
+                    // immediately instead of waiting for the 30-min idle timeout.
+                    // Without this, the next trigger pipes into a zombie container.
+                    if (result.status === 'success') {
+                      queue.notifyIdle(guestQueueKey);
+                    }
+                    if (result.status === 'error') {
+                      if (result.error && result.error.includes('No conversation found')) {
+                        logger.warn(
+                          { guest: guestGroup.name, sessionId: sessions[guestGroup.folder] },
+                          'Guest session file missing — clearing stale session ID',
+                        );
+                        delete sessions[guestGroup.folder];
+                        deleteSession(guestGroup.folder);
+                      }
+                      queue.notifyIdle(guestQueueKey);
+                    }
                   },
                   guestQueueKey,
                 ).catch((err) => {
@@ -934,12 +958,33 @@ async function main(): Promise<void> {
       const text = formatOutbound(rawText);
       if (text) await channel.sendMessage(jid, text);
     },
+    sendReport: async (jid, rawText) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) {
+        logger.warn({ jid }, 'No channel owns JID, cannot send report');
+        return;
+      }
+      const text = formatOutbound(rawText);
+      if (text) {
+        if (channel.sendReport) {
+          await channel.sendReport(jid, text);
+        } else {
+          await channel.sendMessage(jid, text);
+        }
+      }
+    },
   });
   startIpcWatcher({
     sendMessage: (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
+    },
+    sendReport: (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      // Use sendReport if the channel supports it (Slack); otherwise fall back to sendMessage
+      return channel.sendReport ? channel.sendReport(jid, text) : channel.sendMessage(jid, text);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

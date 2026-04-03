@@ -73,6 +73,7 @@ export interface SchedulerDependencies {
     groupFolder: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendReport: (jid: string, text: string) => Promise<void>;
 }
 
 async function runTask(
@@ -187,8 +188,9 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          // Forward result to user. Use sendReport so scheduled task output
+          // always posts to channel root, never threads into a conversation.
+          await deps.sendReport(task.chat_jid, streamedOutput.result);
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
