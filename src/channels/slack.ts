@@ -239,7 +239,8 @@ export class SlackChannel implements Channel {
       const persona = this.personas.get(jid);
       // Use locked thread (snapshotted at agent run start) so replies go to the
       // correct thread even if new messages arrived during processing.
-      const threadTs = this.lockedReplyThreads.get(jid) ?? this.activeThreads.get(jid);
+      const threadTs =
+        this.lockedReplyThreads.get(jid) ?? this.activeThreads.get(jid);
       const sendChunk = async (chunk: string) => {
         try {
           await this.app.client.chat.postMessage({
@@ -305,7 +306,10 @@ export class SlackChannel implements Channel {
         ...(persona?.username && { username: persona.username }),
         ...(persona?.iconEmoji && { icon_emoji: persona.iconEmoji }),
       });
-      logger.info({ jid, length: text.length }, 'Slack report posted to channel root');
+      logger.info(
+        { jid, length: text.length },
+        'Slack report posted to channel root',
+      );
     } catch {
       // Markdown block unsupported — fall back to plain text (still root)
       try {

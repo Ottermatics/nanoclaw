@@ -5,7 +5,13 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getAllChannelGuests, getTaskById, updateTask } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  getAllChannelGuests,
+  getTaskById,
+  updateTask,
+} from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -75,16 +81,25 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if ((data.type === 'message' || data.type === 'report') && data.chatJid && data.text) {
+              if (
+                (data.type === 'message' || data.type === 'report') &&
+                data.chatJid &&
+                data.text
+              ) {
                 // Authorization: verify this group can send to this chatJid.
                 // Allowed if: main agent, owner of the target channel, or a
                 // registered guest in the target channel (so guests can use
                 // send_message in the channel they're currently responding in).
                 const targetGroup = registeredGroups[data.chatJid];
-                const isOwner = targetGroup && targetGroup.folder === sourceGroup;
-                const isGuest = !isOwner && getAllChannelGuests().some(
-                  (g) => g.channelJid === data.chatJid && g.guestFolder === sourceGroup,
-                );
+                const isOwner =
+                  targetGroup && targetGroup.folder === sourceGroup;
+                const isGuest =
+                  !isOwner &&
+                  getAllChannelGuests().some(
+                    (g) =>
+                      g.channelJid === data.chatJid &&
+                      g.guestFolder === sourceGroup,
+                  );
                 if (isMain || isOwner || isGuest) {
                   if (data.type === 'report') {
                     await deps.sendReport(data.chatJid, data.text);
@@ -95,7 +110,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   } else {
                     await deps.sendMessage(data.chatJid, data.text);
                     logger.info(
-                      { chatJid: data.chatJid, sourceGroup, via: isMain ? 'main' : isOwner ? 'owner' : 'guest' },
+                      {
+                        chatJid: data.chatJid,
+                        sourceGroup,
+                        via: isMain ? 'main' : isOwner ? 'owner' : 'guest',
+                      },
                       'IPC message sent',
                     );
                   }

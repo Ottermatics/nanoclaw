@@ -339,7 +339,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // Lock the reply thread for this agent run so replies go to the triggering
   // thread even if new messages arrive during processing (race condition fix).
-  (channel as unknown as { lockReplyThread?: (jid: string) => void }).lockReplyThread?.(chatJid);
+  (
+    channel as unknown as { lockReplyThread?: (jid: string) => void }
+  ).lockReplyThread?.(chatJid);
 
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
@@ -409,7 +411,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   // Unlock reply thread after agent run completes (success or error).
-  (channel as unknown as { unlockReplyThread?: (jid: string) => void }).unlockReplyThread?.(chatJid);
+  (
+    channel as unknown as { unlockReplyThread?: (jid: string) => void }
+  ).unlockReplyThread?.(chatJid);
 
   return true;
 }
@@ -754,9 +758,15 @@ async function startMessageLoop(): Promise<void> {
                       queue.notifyIdle(guestQueueKey);
                     }
                     if (result.status === 'error') {
-                      if (result.error && result.error.includes('No conversation found')) {
+                      if (
+                        result.error &&
+                        result.error.includes('No conversation found')
+                      ) {
                         logger.warn(
-                          { guest: guestGroup.name, sessionId: sessions[guestGroup.folder] },
+                          {
+                            guest: guestGroup.name,
+                            sessionId: sessions[guestGroup.folder],
+                          },
                           'Guest session file missing — clearing stale session ID',
                         );
                         delete sessions[guestGroup.folder];
@@ -984,7 +994,9 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       // Use sendReport if the channel supports it (Slack); otherwise fall back to sendMessage
-      return channel.sendReport ? channel.sendReport(jid, text) : channel.sendMessage(jid, text);
+      return channel.sendReport
+        ? channel.sendReport(jid, text)
+        : channel.sendMessage(jid, text);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
