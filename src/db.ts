@@ -178,6 +178,30 @@ export function initDatabase(): void {
 
   // Migrate from JSON files if they exist
   migrateJsonState();
+
+  // Prune old data on startup
+  pruneOldData();
+}
+
+/**
+ * Delete messages and task run logs older than the given number of days.
+ * Runs VACUUM only when rows were actually removed.
+ */
+export function pruneOldData(days: number = 90): void {
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  const msgs = db
+    .prepare('DELETE FROM messages WHERE timestamp < ?')
+    .run(cutoff);
+  const logs = db
+    .prepare('DELETE FROM task_run_logs WHERE run_at < ?')
+    .run(cutoff);
+  if (msgs.changes || logs.changes) {
+    db.exec('VACUUM');
+    logger.info(
+      { messages: msgs.changes, taskLogs: logs.changes },
+      `Pruned data older than ${days}d`,
+    );
+  }
 }
 
 /** @internal - for tests only. Creates a fresh in-memory database. */

@@ -109,6 +109,11 @@ A personal Claude assistant accessible via messaging, with minimal custom code.
 - From main: can schedule tasks for any group, view/manage all tasks
 - From other groups: can only manage that group's tasks
 
+### Data Retention
+- Messages and task run logs older than 90 days are pruned automatically on startup
+- Chats table is not pruned (small metadata, useful for group discovery)
+- SQLite VACUUM runs only when rows are actually deleted
+
 ### Group Management
 - New groups are added explicitly via the main channel
 - Groups are registered in SQLite (via the main channel or IPC `register_group` command)

@@ -134,7 +134,8 @@
       "Bash(find '/mnt/c/Users/Sup/Ottermatics Dropbox/Ottermatics/agents/nanoclaw' -name *.db -o -name messages.db)",
       "Bash(wc -l /mnt/c/Users/Sup/Ottermatics Dropbox/Ottermatics/agents/nanoclaw/groups/slack_main/conversations/*.md)",
       "Bash(gh pr:*)",
-      "Bash(find \"/mnt/c/Users/Sup/Ottermatics Dropbox/Ottermatics/agents/nanoclaw/groups\" -name \"*.log\" -type f -exec ls -lrt {} +)"
+      "Bash(find \"/mnt/c/Users/Sup/Ottermatics Dropbox/Ottermatics/agents/nanoclaw/groups\" -name \"*.log\" -type f -exec ls -lrt {} +)",
+      "Bash(npm test:*)"
     ]
   }
 }
